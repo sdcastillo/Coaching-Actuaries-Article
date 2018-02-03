@@ -1,0 +1,158 @@
+---
+title: "Actuarial Exams"
+author: "Sam Castillo"
+date: "February 3, 2018"
+output: html_document
+---
+
+```{r global_options, warning= F, message= F, include=F}
+suppressMessages({
+library(DT)
+require(lubridate)
+library(tidyr)
+library(randomForest)
+library(e1071)
+library(ROCR)
+library(pROC)
+library(pdp)
+library(AppliedPredictiveModeling)
+library(mice)
+library(Amelia)
+library(caret)
+library(DMwR)
+library(ROSE)
+library(corrplot)
+library(randomForest)
+library(prettyR)
+library(readxl)
+library(VIM)#missing data analysis
+library(tidyverse)#always load last
+  
+#data table options
+opts = list(searching = F)
+
+#load data source
+load("adapt_data.Rda")
+
+#round numeric columns for prettier datatables
+adapt_data = adapt_data %>% 
+  mutate_if(is.numeric, funs(round(., 1)))
+})
+
+#describe what the features are
+feature_schema = read_excel('data_schema.xlsx')
+```
+##1.  Intro
+
+Actuarial exams have a pass rate of between 40-50%.  There are 8-10 exams required in order to become a Fellow.  Having passed three so far, I wanted to understand how I can improve my study methods going forwards.  To that end, I emailed the people at `CoachingActuaries.com` [insert link] and asked them to send me the data from my hours of practice on their website.
+
+Adapt is an online learning tool which consists of simulated practice exams, learning videos, an online forum, and other resources.
+
+So far I have passed the first three exams, P/1 in Probability Theory, FM/2 in Financial Math, and MFE/3F in Financial Economics.  This takes hours of practice.  The Society of Actuaries (SOA) recommends 100 study hours per hour of exam, or 300 for each of these three exams.  This data represents only study time on the Adapt platform.
+
+##2.  Data Overview
+
+The data consists of question-level detail for the online course.  It's a lot of math problems.  There are 1500 individual questions, with details such as whether it was correct or not, the time spent on it, the curriculumn category, and so forth.
+
+```{r}
+adapt_data %>% 
+  group_by(course) %>% 
+  filter(exam_type != "NA") %>% 
+  summarise("Total Adapt Practice Exam Study Hours" = round(sum(minutes_used, na.rm = T)/60,1)) %>% 
+  datatable(options = opts)
+```
+
+
+```{r}
+feature_schema %>% 
+  datatable(options = opts)
+```
+
+
+```{r}
+adapt_data %>% 
+  arrange(desc(approx_remaining_time)) %>% 
+  select(course, correct, exam_type, difficulty,minutes_used, q_ordinal, cat1, subcat1) %>% 
+  rename(question_ordinal = q_ordinal,
+         major_category = cat1,
+         minor_category = subcat1) %>% 
+  head(5) %>% 
+  datatable(options = opts)
+```
+
+My process has varied for different exams due to work/life changes.  For exam P, FM, and MFE, I had a background from math coursework, then I worked through the Actuarial Study Manuals (ASM) for between 1 - 3 months, and finally, I purchased a two-week Adapt subscription to drill out practice exams.  For MFE, this was slightly different as I spent more time on quizzes.
+
+Here is a graph of my study time.  Quizzes are non timed, and are customized.  Exams are limited to 3 hours, 30 questions from a simulated topic, and I tried to not cheat during these (e.g., look at notes, pause the exam, phone a friend, etc). 
+
+
+##3. Visualizations
+
+Earned Level
+
+```{r fig.height= 4}
+#[pretty timeline graph for P, FM, MFE.  Use P == blue, FM == green, MFE == orange]
+p = adapt_data %>% 
+  filter(course == "P")
+
+fm = adapt_data %>% 
+  filter(course == "FM")
+
+mfe = adapt_data %>% 
+  filter(course == "MFE")
+
+p.plot <- p %>% 
+      filter(exam_type == "e") %>% 
+      group_by(creation_dt) %>% 
+      summarise(EL = max(EL_begin)) %>% 
+      ggplot(aes(creation_dt, EL)) +
+      geom_line(color = "darkblue") + 
+      ylim(0,10)
+
+fm.plot <- fm %>% 
+      filter(exam_type == "e") %>% 
+      group_by(creation_dt) %>% 
+      summarise(EL = max(EL_begin)) %>% 
+      ggplot(aes(creation_dt, EL)) +
+      geom_line(color = "green") + 
+      ylim(0,10)
+
+mfe.plot <- mfe %>% 
+      filter(exam_type == "e") %>% 
+      group_by(creation_dt) %>% 
+      summarise(EL = max(EL_begin)) %>% 
+      ggplot(aes(creation_dt, EL)) +
+      geom_line(color = "orange") + 
+      ylim(0,10)
+
+grid.arrange(p.plot, fm.plot, mfe.plot, nrow = 1)
+```
+
+Category Breakdown
+
+These are multiple-choice math questions, and guessing is not useful as the answers are at a minimum of four decimal places.  There has been a lot of strategy talk among actuaries regarding best-pracices for exam-takers.  For instance, the common advice is to practice in a realistic environment, not to spend too much time on a single question, answer the easiest questions first, and most of all to practice, practice, and practice.
+
+The data supports this advice.  Not too surprisingly, the two most importance factors to whether or not any given question is likely to be correct are the difficulty, and the amount of time spent on it.  
+
+The simplest way to asnwer this is to look at the correlations between features.  Is there any input which is consistently different when the question is correct verses incorrect?  As you can see below, there is a strong negative correlation with `difficulty`.  This means that I am less likely to answer questions with higher difficulty.  Interestingly, `minutes_used`, and `remaining_exam_time` are both negative as well.  This is less clear as to why; at this point we do not want to confuse correlation with causation.
+
+The variable `EL_change` is the change in earned level, which is an Adapt-specific rank from 1-10 [define this earlier].
+
+```{r fig.width= 4, fig.height= 4}
+numeric_index <- sapply(adapt_data, is.numeric)
+numeric_cols = adapt_data[,numeric_index] %>%
+  mutate(correct = as.numeric(adapt_data$correct)) %>%
+  select(correct, everything(),- contains("hist"), - minutes_used_adj, -EL_begin, -EL_end, -nth_exam, - nth_e_or_q, -hrs_since_previous_e) %>%
+  rename(remaining_exam_time = approx_remaining_time) %>% 
+  as.matrix() 
+corrplot(cor(numeric_cols),method = "square")
+```
+
+##4.  Feature Engineering
+
+I generated additional features and used random forest importance rankings, class-separation plots, and improved accuracy to decide which features to keep.
+
+
+
+
+
+
