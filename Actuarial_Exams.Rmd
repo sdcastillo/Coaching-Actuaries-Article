@@ -2,7 +2,11 @@
 title: "Actuarial Exams"
 author: "Sam Castillo"
 date: "February 3, 2018"
-output: html_document
+output: 
+  html_document:
+    toc: true
+    toc_depth: 2
+    theme: flatly
 ---
 
 ```{r global_options, warning= F, message= F, echo = F}
@@ -77,34 +81,50 @@ my_density_plot = function(cur_features){
             )
 }
 
-#confusion_matrix
-eval_model = function(cur_model, cur_data){
-  predictor = as.numeric(predict.train(cur_model))
-  response = as.numeric(cur_data$correct)
-  list('ROC' = roc(response, predictor),
-       'confusionMatrx' = confusionMatrix(response, predictor))
+#evaluate using the TEST data
+eval_model = function(cur_name = "model",cur_model, cur_test_data){
+  #somehow this now works??  The documentation on roxygen is out of date
+  predictor = as.numeric(predict.train(object = cur_model, new  = cur_test_data %>% select(-correct), unkOnly = T))
+  label = as.numeric(cur_test_data$correct)
+  out <- confusionMatrix(label, predictor)
+ data_frame("Model" = cur_name,
+            'ROC' = roc(label, predictor)$auc,
+       'Test Set Accuracy' = out$overall[1])
 }
 ```
-##1.  Intro
+##1. Introduction
 
-Actuarial exams have a pass rate of between 40-50%.  There are 8-10 exams required in order to become a Fellow.  Having passed three so far, I wanted to understand how I can improve my study methods going forwards.  To that end, I emailed the people at `CoachingActuaries.com` [insert link] and asked them to send me the data from my hours of practice on their website.
+The actuarial profession has been rated highly for decades for low stress levels, high compensation, an interesting work environment, and job security; however, the elephant in the room is the rigorous actuarial exam requirements.  There are 10 exams in order to gain a Fellow credential, and each of these have pass rates between 40-50%.  There is a great deal of literature and study tutorials based on anectdotal evidence, offering prescriptive study methods and study schedules, but very little hard data.  This analysis uses statistical learning techniques to shed light onto which factors contribute to actuarial exam success.
 
-Adapt is an online learning tool which consists of simulated practice exams, learning videos, an online forum, and other resources.
+This data was provided by [CoachingActuaries.com](coachingactuaries.com), from my personal online-learning accounts for exams P/1, FM/2, and MFE/3F with the Adapt product.  This article would not have been possible without the support of Ben Kester, [[[other names]]] who graciously agreed to send me the data and publish the result.  I am not being compensated in any way for writing this article.
 
-So far I have passed the first three exams, P/1 in Probability Theory, FM/2 in Financial Math, and MFE/3F in Financial Economics.  This takes hours of practice.  The Society of Actuaries (SOA) recommends 100 study hours per hour of exam, or 300 for each of these three exams.  This data represents only study time on the Adapt platform.
+The premiminary actuarial exams consist of 3-hour, multiple-choice, computer-based math tests offered once every six months.  There are 30-35 questions for the first three exams.  My experience has been with exam P, covering probability theory, exam FM, covering financial mathematics, and exam MFE (soon to be IMF), covering models for financial economics. 
 
-##2.  Data Overview
+Adapt is an automatic learning engine which generates problems to fit a user's current skill level.  These questions are intented to mimic the questions on real exams.  The adapt subscription includes access to a practice test bank, an exam simulator, tutorial videos, a user forum, and performance feedback.  Each user is given an Earned Level, which ranges from 1 - 10 and increases as they answer more difficult questions correctly.  Adapt claims that users with an earned level above 7 have over a 90% pass percentage based on post-exam surveys. *[check this claim]*  For exams P, FM, and MFE, my account logged 36.7, 60.1, and 54.8 hours of practice respectively. These numbers are only estimates, as there is no clear measure for active screen time.  Time spent on the Adapt product represents only a fraction of my total study time, which included off-screen reviews and textbook practice.  The Society of Actuaries (SOA) recommends 100 study hours per hour of exam, or 300 for each of these three exams.
 
-The data consists of question-level detail for the online course.  It's a lot of math problems.  There are 1500 individual questions, with details such as whether it was correct or not, the time spent on it, the curriculumn category, and so forth.
+The data and R code for generating this article can be downloaded [here](insert link).  
 
-```{r echo = F}
-adapt_data %>% 
-  group_by(course) %>% 
-  filter(exam_type != "NA") %>% 
-  summarise("Total Adapt Practice Exam Study Hours" = round(sum(minutes_used, na.rm = T)/60,1)) %>% 
-  datatable(options = opts)
-```
+##2. Research Findings
 
+ - The time spent per problem is the most significant factor impacting whether a question is correct.  Time is a valuable currency in a 30-question exam.  In every model which was tested, the time spent per problem was most important.  The optimal time per problem is about 5.5 minutes for the single-question level.
+ 
+ - Question difficulty as Adapt rates it does have an immediate negative correlation with correct outcomes.  Simply because other people find a topic difficult does not imply that the person taking the exam should.  Difficulty can be overcome with practice.  When looking at the partial dependence plots, the reverse is sometimes true.
+ 
+ - Practice questions are less useful when the user gets them wrong.  For each specific sub-category, these models calculated a running total of the problem difficulty, added to the total when a question was answered correctly and subtracting when incorrect.  This feature could be used to predict whether any given question would be answered correctly.
+ 
+ - Successful practice uses questions which are of greater difficulty than needed.  Weight-lifters practice with heavier than compitition weights, baseball players practice-swing with weighted bats, martial artists puch bricks to strengthen their hands, and actuarial students should solve math problems more difficult than needed to prepare for the real exam.  These models used a feature which filters out questions of a lesser difficulty and found this to be significant in predicting question outcomes.
+
+##3. Data Organization
+
+###Original Quantitative Features
+
+These data represent only a single individual's experience, and these results have not been verified against a broader population. Ther
+
+[Make a graphic showing the modeling process]
+
+[raw data --> cleaned --> transformed --> visualization --> models --> interpretation]
+
+The data consists of question-level detail for the online course. There are around 1500 math problems from my personal account, with details such as whether it was correct or not, the time spent on it, the curriculumn category, and so forth.
 
 ```{r echo = F}
 feature_schema %>% 
@@ -112,12 +132,9 @@ feature_schema %>%
   datatable(options = opts)
 ```
 
-My process has varied for different exams due to work/life changes.  For exam P, FM, and MFE, I had a background from math coursework, then I worked through the Actuarial Study Manuals (ASM) for between 1 - 3 months, and finally, I purchased a two-week Adapt subscription to drill out practice exams.  For MFE, this was slightly different as I spent more time on quizzes.
+
 
 Here is a graph of my study time.  Quizzes are non timed, and are customized.  Exams are limited to 3 hours, 30 questions from a simulated topic, and I tried to not cheat during these (e.g., look at notes, pause the exam, phone a friend, etc). 
-
-
-##3. Basic Features
 
 Earned Level
 
@@ -159,10 +176,6 @@ mfe.plot <- mfe %>%
 grid.arrange(p.plot, fm.plot, mfe.plot, nrow = 1)
 ```
 
-Category Breakdown
-
-These are multiple-choice math questions, and guessing is not useful as the answers are at a minimum of four decimal places.  There has been a lot of strategy talk among actuaries regarding best-pracices for exam-takers.  For instance, the common advice is to practice in a realistic environment, not to spend too much time on a single question, answer the easiest questions first, and most of all to practice, practice, and practice.
-
 The data supports this advice.  Not too surprisingly, the two most importance factors to whether or not any given question is likely to be correct are the difficulty, and the amount of time spent on it.  
 
 The simplest way to asnwer this is to look at the correlations between features.  Is there any input which is consistently different when the question is correct verses incorrect?  As you can see below, there is a strong negative correlation with `difficulty`.    Interestingly, `minutes_used`, and `remaining_exam_time` are both negative as well.  This is less clear as to why; at this point we do not want to confuse correlation with causation.
@@ -185,13 +198,14 @@ Class separation is how well the x-features separate out the class label, `corre
 ```{r echo = F}
 numeric_cols %>%
   as_data_frame() %>% 
-  select(-correct, - EL_change) %>% 
   as.matrix() %>% 
   my_density_plot()
 ```
+###Original Categorical Features
 
+[show a few question categories, subcategories.  Talk about question tags]
 
-##4.  Engineered Historical Features
+###Engineered Historical Features
 
 I generated additional features and used random forest importance rankings, class-separation plots, and improved accuracy to decide which features to keep.
 
@@ -209,9 +223,9 @@ adapt_data %>%
   my_density_plot()
 ```
 
-##5. Modeling
+##4. Modeling
 
-The Receiver Operating Characteristic (ROC) metric was used for model selection, with the exception of the random forest which used accuracy. A 75%-25% validation set split was first created, and then 10-fold cross validation was used for model training.  The numeric variables were pre-processed with to be scaled and centered.  
+The Receiver Operating Characteristic (ROC) metric was used for model selection. A 75%-25% validation set split was first created, and then 10-fold cross validation was used for model training.  The numeric variables were pre-processed with to be scaled and centered.  
 
 Missing values were determined as those questions where `minutes_used` was equal to zero, or less than 10 seconds.
 
@@ -220,33 +234,51 @@ Missing values were determined as those questions where `minutes_used` was equal
 ```{r}
 set.seed(400)
 
-#repeate question is very low variance.... it's almost always zero
-best_subset <-  adapt_data%>% 
+#drop columns which have no predictive power
+#we only care about predicting exam outcomes
+model_data <- adapt_data %>% 
+  filter(exam_type == "e") %>% 
+  select(- questionID, - examID, - exam_type, - creation_dt_time, - creation_dt) %>% 
+  ungroup()
+
+#these features are ok
+best_subset <-  model_data %>% 
   ungroup() %>% 
   mutate_at(c("cat1", "cat2", "cat3", "subcat1", "subcat3", "subcat3"), funs(droplevels)) %>% 
   #factor levels mess up models
-  dplyr::select( correct, difficulty, marked, minutes_used, hist_greater_diff_time_correct, hist_net_diff, approx_remaining_time, creation_hr, cat1)
+  dplyr::select( correct, difficulty, marked, minutes_used, hist_greater_diff, hist_net_diff, approx_remaining_time, creation_hr, cat1, hist_repeat_question)
 
-index_train <- createDataPartition(y = adapt_data$correct, p = 0.75, list = FALSE)
-training <- adapt_data[index_train,]
-testing <- adapt_data[-index_train,]
+#this is the easily-interpretible data
+#this splits to preserve the ORIGINAL class distribution, but doesn't over/undersample
+index_train <- createDataPartition(y = model_data$correct, p = 0.75, list = FALSE)
 
+#these have worked in the past
+best_training <- best_subset[index_train,]
+best_testing <- best_subset[-index_train,]
+
+training <- model_data[index_train,]
+testing <- model_data[-index_train,]
+
+#this is to improve accuracy for knn and logit
 preproc.values <- preProcess(x = best_subset, method = c("center", "scale"))
-transformed_data = predict(preproc.values, newdata = best_subset) 
+best_transformed = predict(preproc.values, newdata = best_subset) 
 
+training_transformed <- best_transformed[index_train,]
+testing_transformed <- best_transformed[-index_train,]
 ```
 
-A Naive Bayes baseline model gives an accuracy of 71% and AUC of 0.6388.  This was only using the features x, y, and z.  When creating the historical features, a random forest was used for variable importance.
+A Naive Bayes baseline model gives an accuracy of 73% and AUC of 0.6388.  This was only using the features x, y, and z.  When creating the historical features, a random forest was used for variable importance.
 
 The below partial dependency plots of the random forest model show how the probability of answering a question correctly changes with the input levels.  
 
-
 ```{r}
 train_control <- trainControl(method = "cv", number=10)
-nb1 <- train(correct ~., data = transformed_data %>% select(-cat1), trControl=train_control, method="nb")
-rb_metrics = eval_model(nb1, transformed_data)
-metrics$ROC
+#nb1 <- train(correct ~., data = training_transformed %>% select(-cat1), trControl=train_control, method="nb")
+
+#nb_metrics = eval_model("Naive Bayes", nb1, testing_transformed)
 ```
+
+
 
 Logistic Regression
 
@@ -254,42 +286,67 @@ Logistic Regression
 train_control<- trainControl(method="cv", number=10)
 
 f1 = correct ~ difficulty + minutes_used
-logit1<- train(f1, data = transformed_data, trControl=train_control, method="glm", family=binomial())
+logit1<- train(f1, data = training_transformed, trControl=train_control, method="glm", family=binomial())
 
 f2 = correct ~ difficulty + minutes_used  + approx_remaining_time + creation_hr
-logit2 <- train(f2, data = fm, trControl = train_control, method="glm", family=binomial())
+logit2 <- train(f2, data = training_transformed, trControl = train_control, method="glm", family=binomial())
 
-f3 = correct ~ difficulty + marked + minutes_used +  hist_greater_diff_time_correct + approx_remaining_time + creation_hr + cat1
-logit3 <- train(f3, data = transformed_data, trControl = train_control, method="glm", family=binomial())
-logit_metrics = eval_model(logit3, transformed_data)
-metrics$ROC
+f3 = correct ~ difficulty + marked + minutes_used +  hist_greater_diff + approx_remaining_time + creation_hr + cat1
+logit3 <- train(f3, data = training_transformed, trControl = train_control, method="glm", family=binomial())
+
+f4 = correct ~ difficulty + minutes_used  + hist_repeat_question
+logit4 <- train(f4, data = training_transformed, trControl = train_control, method="glm", family=binomial())
+
+
+logit_metrics = eval_model("Logistic Regression", logit3, testing_transformed)
 ```
 
 K-nearest-neighbor
 
 ```{r}
-
+ctrl <- trainControl(method="repeatedcv", repeats = 3)
+#knn1 <- train(correct ~ ., data = training_transformed, method = "knn", trControl = ctrl, tuneLength = 20)
+#knn_metrics = eval_model("K_Nearest Neighbor", knn1, testing_transformed)
 ```
 
 Random Forest
-
-[Model selection comparison]
-
-
 
 ```{r}
 # Create model with default paramters
 control <- trainControl(method = "repeatedcv", classProbs = T, number=10, repeats=3)
 seed <- 7; set.seed(seed)
 metric <- "Accuracy"
-mtry <- sqrt(ncol(best_subset)) # mtry can be increased at the risk of over-fitting
+mtry <- sqrt(ncol(training)) # mtry can be increased at the risk of over-fitting
 tunegrid <- expand.grid(.mtry=mtry)
 
-rf1 <- train(correct ~., data =best_subset , method="rf", metric=metric, tuneGrid=tunegrid, trControl=control)
-rf_metrics = eval_model(rf1, transformed_data)
-metrics$ROC
-metrics$confusionMatrx
-plot(varImp(rf1), top = 20)
+#using all variables
+#rf1 <- train(correct ~., data = training , method="rf", metric=metric, tuneGrid=tunegrid, trControl=control)
+
+mtry <- sqrt(ncol(best_training)) # mtry can be increased at the risk of over-fitting
+tunegrid <- expand.grid(.mtry=mtry)
+
+#using a subset of variables
+#rf2 <- train(correct ~., data = best_training , method="rf", metric=metric, tuneGrid=tunegrid, trControl=control)
+#rf_metrics = eval_model("Random Forest", rf2, best_testing)
+#plot(varImp(rf2), top = 20)
+```
+
+[Model selection comparison]
+
+```{r eval = F}
+metrics_data = rbind(nb_metrics, logit_metrics, knn_metrics, rf_metrics)
+metrics_data %>% 
+  arrange(desc(ROC))
+```
+
+
+###Model Selection
+
+[model output/interpretation section]
+
+###Model Interpretation
+
+```{r eval = F}
 
 difficulty.plot <- rf1 %>% 
   pdp::partial(pred.var = "difficulty") %>% 
@@ -302,7 +359,7 @@ minutes_used.plot <- rf1 %>%
   scale_y_reverse() 
 
 hist1 <- rf1 %>% 
-  pdp::partial(pred.var = "hist_greater_diff_time_correct") %>% 
+  pdp::partial(pred.var = "hist_greater_diff") %>% 
   autoplot(rug = T, train = best_subset) + 
   scale_y_reverse()
 
@@ -318,4 +375,4 @@ hist3 <- rf1 %>%
 
 grid.arrange(difficulty.plot, minutes_used.plot, hist1, hist2, hist3)
 ```
-
+##4.  Conclusion
