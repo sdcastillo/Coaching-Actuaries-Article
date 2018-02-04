@@ -5,7 +5,7 @@ date: "February 3, 2018"
 output: html_document
 ---
 
-```{r global_options, warning= F, message= F, include=F}
+```{r global_options, warning= F, message= F, echo = F}
 suppressMessages({
 library(DT)
 require(lubridate)
@@ -36,11 +36,54 @@ load("adapt_data.Rda")
 
 #round numeric columns for prettier datatables
 adapt_data = adapt_data %>% 
-  mutate_if(is.numeric, funs(round(., 1)))
+  mutate_if(is.numeric, funs(round(., 1))) %>% 
+  mutate(q_ordinal = as.numeric(q_ordinal),
+          #sunday is 1
+         numeric_weekday = zoo::index(weekday,levels(adapt_data$weekday)) + 2)
 })
+
+#for some models, the levels need to be valid variable names.  This means that they can't be "TRUE"/"FALSE"
+levels(adapt_data$correct) <- c("NO", "YES")
+levels(adapt_data$marked) <- c("NO", "YES")
 
 #describe what the features are
 feature_schema = read_excel('data_schema.xlsx')
+
+#make a graph showing pairwise dotplots
+my_pairs_plot = function(cur_features){
+  transparentTheme(trans = .9)
+  caret::featurePlot(x = cur_features,
+            y = cur_features$correct,
+            plot = "pairs",
+            scales = list(x = list(relation="free"), 
+                          y = list(relation="free")), 
+            adjust = 1.5, 
+            pch = "+",
+            auto.key = list(columns = 2))
+}
+
+#make a graph showing density
+my_density_plot = function(cur_features){
+  transparentTheme(trans = .9)
+  featurePlot(x = cur_features, 
+            y = adapt_data$correct,
+            plot = "density", 
+            ## Pass in options to xyplot() to 
+            ## make it prettier
+             scales = list(x = list(relation="free"), 
+                           y = list(relation="free")), 
+             adjust = 1.5, 
+            auto.key = list(columns = 2)
+            )
+}
+
+#confusion_matrix
+eval_model = function(cur_model, cur_data){
+  predictor = as.numeric(predict.train(cur_model))
+  response = as.numeric(cur_data$correct)
+  list('ROC' = roc(response, predictor),
+       'confusionMatrx' = confusionMatrix(response, predictor))
+}
 ```
 ##1.  Intro
 
@@ -54,7 +97,7 @@ So far I have passed the first three exams, P/1 in Probability Theory, FM/2 in F
 
 The data consists of question-level detail for the online course.  It's a lot of math problems.  There are 1500 individual questions, with details such as whether it was correct or not, the time spent on it, the curriculumn category, and so forth.
 
-```{r}
+```{r echo = F}
 adapt_data %>% 
   group_by(course) %>% 
   filter(exam_type != "NA") %>% 
@@ -63,20 +106,9 @@ adapt_data %>%
 ```
 
 
-```{r}
+```{r echo = F}
 feature_schema %>% 
-  datatable(options = opts)
-```
-
-
-```{r}
-adapt_data %>% 
-  arrange(desc(approx_remaining_time)) %>% 
-  select(course, correct, exam_type, difficulty,minutes_used, q_ordinal, cat1, subcat1) %>% 
-  rename(question_ordinal = q_ordinal,
-         major_category = cat1,
-         minor_category = subcat1) %>% 
-  head(5) %>% 
+  filter(!str_detect(`Feature Name`, "hist")) %>% 
   datatable(options = opts)
 ```
 
@@ -85,11 +117,11 @@ My process has varied for different exams due to work/life changes.  For exam P,
 Here is a graph of my study time.  Quizzes are non timed, and are customized.  Exams are limited to 3 hours, 30 questions from a simulated topic, and I tried to not cheat during these (e.g., look at notes, pause the exam, phone a friend, etc). 
 
 
-##3. Visualizations
+##3. Basic Features
 
 Earned Level
 
-```{r fig.height= 4}
+```{r echo = F, fig.height= 4}
 #[pretty timeline graph for P, FM, MFE.  Use P == blue, FM == green, MFE == orange]
 p = adapt_data %>% 
   filter(course == "P")
@@ -113,7 +145,7 @@ fm.plot <- fm %>%
       group_by(creation_dt) %>% 
       summarise(EL = max(EL_begin)) %>% 
       ggplot(aes(creation_dt, EL)) +
-      geom_line(color = "green") + 
+      geom_line(color = "darkgreen") + 
       ylim(0,10)
 
 mfe.plot <- mfe %>% 
@@ -133,26 +165,157 @@ These are multiple-choice math questions, and guessing is not useful as the answ
 
 The data supports this advice.  Not too surprisingly, the two most importance factors to whether or not any given question is likely to be correct are the difficulty, and the amount of time spent on it.  
 
-The simplest way to asnwer this is to look at the correlations between features.  Is there any input which is consistently different when the question is correct verses incorrect?  As you can see below, there is a strong negative correlation with `difficulty`.  This means that I am less likely to answer questions with higher difficulty.  Interestingly, `minutes_used`, and `remaining_exam_time` are both negative as well.  This is less clear as to why; at this point we do not want to confuse correlation with causation.
+The simplest way to asnwer this is to look at the correlations between features.  Is there any input which is consistently different when the question is correct verses incorrect?  As you can see below, there is a strong negative correlation with `difficulty`.    Interestingly, `minutes_used`, and `remaining_exam_time` are both negative as well.  This is less clear as to why; at this point we do not want to confuse correlation with causation.
 
-The variable `EL_change` is the change in earned level, which is an Adapt-specific rank from 1-10 [define this earlier].
+The variable `EL_change` is the change in earned level, which is an Adapt-specific rank from 1-10 [define this earlier].  Note the negative correlation with `weekday`.  This could be due to my history of taking practice exams during certain days of the week.
 
-```{r fig.width= 4, fig.height= 4}
+```{r echo = F, fig.width= 4, fig.height= 4}
 numeric_index <- sapply(adapt_data, is.numeric)
 numeric_cols = adapt_data[,numeric_index] %>%
   mutate(correct = as.numeric(adapt_data$correct)) %>%
-  select(correct, everything(),- contains("hist"), - minutes_used_adj, -EL_begin, -EL_end, -nth_exam, - nth_e_or_q, -hrs_since_previous_e) %>%
-  rename(remaining_exam_time = approx_remaining_time) %>% 
+  select(correct, everything(),- contains("hist"), -EL_begin, -EL_end, -nth_exam, - nth_e_or_q, -hrs_since_previous_e) %>%
+  rename(remaining_exam_time = approx_remaining_time,
+         weekday = numeric_weekday) %>% 
   as.matrix() 
 corrplot(cor(numeric_cols),method = "square")
 ```
 
-##4.  Feature Engineering
+Class separation is how well the x-features separate out the class label, `correct` in this case.  
+
+```{r echo = F}
+numeric_cols %>%
+  as_data_frame() %>% 
+  select(-correct, - EL_change) %>% 
+  as.matrix() %>% 
+  my_density_plot()
+```
+
+
+##4.  Engineered Historical Features
 
 I generated additional features and used random forest importance rankings, class-separation plots, and improved accuracy to decide which features to keep.
 
+```{r echo = F}
+feature_schema %>% 
+  filter(str_detect(`Feature Name`, "hist")) %>% 
+  datatable(options = opts)
+```
+
+As the below plot shows, there is improved class separation for several of the historical features.  Intuitively, this implies that my likelihood of answering a question correctly depends on the number of questions which I have answered in the past in the same category.  Not all of these features are useful, and in fact this graph is only showing a subset of the 13 historical features tested.
+
+```{r echo = F}
+adapt_data %>%
+  select(contains("hist"), - hist_tot_time_correct, - hist_subcat_diff, - hist_total_time_q, - hist_total_time_q, - hist_cat_n, - hist_n_marked) %>%
+  my_density_plot()
+```
+
+##5. Modeling
+
+The Receiver Operating Characteristic (ROC) metric was used for model selection, with the exception of the random forest which used accuracy. A 75%-25% validation set split was first created, and then 10-fold cross validation was used for model training.  The numeric variables were pre-processed with to be scaled and centered.  
+
+Missing values were determined as those questions where `minutes_used` was equal to zero, or less than 10 seconds.
+
+[fill in paragraph speaking to cat1 missingness and state the number of cases you dropped in total, why they are not important, etc.  MCAR?]
+
+```{r}
+set.seed(400)
+
+#repeate question is very low variance.... it's almost always zero
+best_subset <-  adapt_data%>% 
+  ungroup() %>% 
+  mutate_at(c("cat1", "cat2", "cat3", "subcat1", "subcat3", "subcat3"), funs(droplevels)) %>% 
+  #factor levels mess up models
+  dplyr::select( correct, difficulty, marked, minutes_used, hist_greater_diff_time_correct, hist_net_diff, approx_remaining_time, creation_hr, cat1)
+
+index_train <- createDataPartition(y = adapt_data$correct, p = 0.75, list = FALSE)
+training <- adapt_data[index_train,]
+testing <- adapt_data[-index_train,]
+
+preproc.values <- preProcess(x = best_subset, method = c("center", "scale"))
+transformed_data = predict(preproc.values, newdata = best_subset) 
+
+```
+
+A Naive Bayes baseline model gives an accuracy of 71% and AUC of 0.6388.  This was only using the features x, y, and z.  When creating the historical features, a random forest was used for variable importance.
+
+The below partial dependency plots of the random forest model show how the probability of answering a question correctly changes with the input levels.  
+
+
+```{r}
+train_control <- trainControl(method = "cv", number=10)
+nb1 <- train(correct ~., data = transformed_data %>% select(-cat1), trControl=train_control, method="nb")
+rb_metrics = eval_model(nb1, transformed_data)
+metrics$ROC
+```
+
+Logistic Regression
+
+```{r}
+train_control<- trainControl(method="cv", number=10)
+
+f1 = correct ~ difficulty + minutes_used
+logit1<- train(f1, data = transformed_data, trControl=train_control, method="glm", family=binomial())
+
+f2 = correct ~ difficulty + minutes_used  + approx_remaining_time + creation_hr
+logit2 <- train(f2, data = fm, trControl = train_control, method="glm", family=binomial())
+
+f3 = correct ~ difficulty + marked + minutes_used +  hist_greater_diff_time_correct + approx_remaining_time + creation_hr + cat1
+logit3 <- train(f3, data = transformed_data, trControl = train_control, method="glm", family=binomial())
+logit_metrics = eval_model(logit3, transformed_data)
+metrics$ROC
+```
+
+K-nearest-neighbor
+
+```{r}
+
+```
+
+Random Forest
+
+[Model selection comparison]
 
 
 
+```{r}
+# Create model with default paramters
+control <- trainControl(method = "repeatedcv", classProbs = T, number=10, repeats=3)
+seed <- 7; set.seed(seed)
+metric <- "Accuracy"
+mtry <- sqrt(ncol(best_subset)) # mtry can be increased at the risk of over-fitting
+tunegrid <- expand.grid(.mtry=mtry)
 
+rf1 <- train(correct ~., data =best_subset , method="rf", metric=metric, tuneGrid=tunegrid, trControl=control)
+rf_metrics = eval_model(rf1, transformed_data)
+metrics$ROC
+metrics$confusionMatrx
+plot(varImp(rf1), top = 20)
+
+difficulty.plot <- rf1 %>% 
+  pdp::partial(pred.var = "difficulty") %>% 
+  autoplot(rug = T, train = best_subset) + 
+  scale_y_reverse()
+
+minutes_used.plot <- rf1 %>% 
+  pdp::partial(pred.var = "minutes_used") %>% 
+  autoplot(rug = T, train = best_subset) + 
+  scale_y_reverse() 
+
+hist1 <- rf1 %>% 
+  pdp::partial(pred.var = "hist_greater_diff_time_correct") %>% 
+  autoplot(rug = T, train = best_subset) + 
+  scale_y_reverse()
+
+hist2 <- rf1 %>% 
+  pdp::partial(pred.var = "hist_net_diff") %>% 
+  autoplot(rug = T, train = best_subset) + 
+  scale_y_reverse()
+
+hist3 <- rf1 %>% 
+  pdp::partial(pred.var = "hist_net_diff") %>% 
+  autoplot(rug = T, train = best_subset) + 
+  scale_y_reverse()
+
+grid.arrange(difficulty.plot, minutes_used.plot, hist1, hist2, hist3)
+```
 
