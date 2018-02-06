@@ -12,42 +12,49 @@ output:
 
 ```{r global_options, warning= F, message= F, echo = F}
 
+#Overview: this code is not intended as a tutorial.  Perhaps you are able to follow along.  If not, don't worry, this is not intended to be easy to follow.  A general data overview is that adapt_data is the primary data source, and the model_data is a cleaned version used for fitting models.  
+
+#sets the options for all knitr markdown chunks below
 knitr::opts_chunk$set(fig.width=12, fig.height=8, fig.path='Figs/',
-                      echo=FALSE, warning=FALSE, message=FALSE)
+                      echo=F, warning=FALSE, message=FALSE)
+
+#----------------------------------------------------Libraries Used -----------------------------------------
 
 suppressMessages({
-library(DT)
-require(lubridate)
-library(tidyr)
-library(randomForest)
-library(e1071)
-library(ROCR)
-library(pROC)
-library(pdp)
-library(AppliedPredictiveModeling)
-library(mice)
-library(Amelia)
-library(caret)
-library(DMwR)
-library(ROSE)
-library(corrplot)
-library(randomForest)
-library(prettyR)
-library(readxl)
-library(VIM)#missing data analysis
-library(tidyverse)#always load last
+library(DT) #Create pretty output tables
+require(lubridate) #format dates/times
+library(tidyr)  #Data manipulation
+library(randomForest) #random forests
+library(e1071) #random forest dependency
+library(ROCR) #Receiver Operating Characteristics for model performance
+library(pROC) #Same as above
+library(pdp) #partial dependency plots
+library(AppliedPredictiveModeling) #create plot matrices
+library(mice) #missing value imputation
+library(Amelia)  #missing value exploration
+library(caret) #machine learning
+library(DMwR) #sub-sampling methods
+library(ROSE) #more subsampling methods
+library(corrplot) #correlation plots
+library(prettyR) #graphics
+library(readxl)  #read xl files
+library(VIM) #missing data analysis
+library(tidyverse) #always load last
+
+  
+#----------------------------------------------------Minor Adjustments -----------------------------------------
   
 #data table options
 opts = list(searching = F)
 
-#load data source
+#load data source.  This has already been cleaned
 load("adapt_data.Rda")
 
 #round numeric columns for prettier datatables
 adapt_data = adapt_data %>% 
   mutate_if(is.numeric, funs(round(., 1))) %>% 
   mutate(q_ordinal = as.numeric(q_ordinal),
-          #sunday is 1
+          #Create numeric variable for use with corrplot.  Sunday is 1, Monday is 2, etc
          numeric_weekday = zoo::index(weekday,levels(adapt_data$weekday)) + 2)
 })
 
@@ -57,6 +64,8 @@ levels(adapt_data$marked) <- c("NO", "YES")
 
 #describe what the features are
 feature_schema = read_excel('data_schema.xlsx')
+
+#----------------------------------------------------Functions to be use later -----------------------------------------
 
 #make a graph showing pairwise dotplots
 my_pairs_plot = function(cur_features){
@@ -87,7 +96,7 @@ my_density_plot = function(cur_features){
             )
 }
 
-#evaluate using the TEST data
+#evaluate model performance using the TEST data
 eval_model = function(cur_name = "model",cur_model, cur_test_data){
   #somehow this now works??  The documentation on roxygen is out of date
   predictor = as.numeric(predict.train(object = cur_model, new  = cur_test_data %>% select(-correct), unkOnly = T))
@@ -107,7 +116,7 @@ The actuarial profession has been rated highly for decades for low stress levels
 
 ###Project Background
 
-My goal in this project was to gain experience using maching learning in a real-world scenario and to apply this knowledge to help actuarial students.  This data was provided by [CoachingActuaries.com](coachingactuaries.com), from my personal online-learning accounts for exams P/1, FM/2, and MFE/3F with the Adapt product.  This article would not have been possible without the support of Ben Kester, Thane Himes, and Tong Khon Teh, who sent me the data and published the result.  I do not work or receive funding from any company or organization that would benefit from this article.  A special thanks to Dr. Una-May OReilly for excellent research ideas.
+My goal in this project was to gain experience using maching learning in a real-world scenario and to apply this knowledge to help actuarial students.  This data was provided by [CoachingActuaries.com](coachingactuaries.com), from my personal online-learning accounts for exams P/1, FM/2, and MFE/3F with the Adapt product.  This article would not have been possible without the support of Ben Kester, Thane Himes, and Tong Khon Teh, who sent me the data and published the result.  I do not work or receive funding from any company or organization that would benefit from this article.  A thank you to to Dr. Una-May OReilly for excellent research ideas.
 
 ###Actuarial Exam Overview
 
@@ -129,7 +138,7 @@ The data and full R code for generating this article can be downloaded from [git
  
  - **Practice questions are less useful when answered incorrectly.**  For each specific sub-category, these models calculated a running total of the problem difficulty which added to the total when a question was answered correctly and subtracting when incorrect.  This feature could be used to predict whether any given question would be answered correctly.
  
- - **Practice on hard questions.**  Weight-lifters practice with heavier than compitition weights, baseball players practice-swing with weighted bats, martial artists puch bricks to strengthen their hands, and actuarial students should solve math problems more difficult than needed to prepare for the real exam.  These models used a feature which filters out questions of a lesser difficulty and found this to be significant in predicting question outcomes.
+ - **Practice on hard questions.**  Baseball players practice-swing with weighted bats, martial artists punch bricks to strengthen their hands, and actuarial students should solve math problems more difficult than needed to prepare for the real exam.  These models used a feature which filters out questions of a lesser difficulty and found this to be significant in predicting question outcomes.
 
 ##3. Data
 
@@ -143,6 +152,7 @@ These data represent only a single individual's experience, my own, and these re
 This data was collected between August 2016 - November 2017, where each exam had about a 2-week Adapt subscription.  As the graphs below indicate, as more time was spent practicing, the account earned level increased.  For exam P, the earned level was highest at about 7.3.  For MFE, the earned level was less significant as a larger majority of practice time was spent on quizzes, which do not impact earned level.
 
 ```{r , fig.height= 3}
+#create plots for earned level over time
 p = adapt_data %>% 
   filter(course == "P")
 
@@ -198,6 +208,7 @@ These features were supplied directly from the CoachingActuaries website and und
 
 ```{r }
 feature_schema %>% 
+  #exclude the NEW features, those containing "hist" in the name
   filter(!str_detect(`Feature Name`, "hist")) %>% 
   datatable(options = opts)
 ```
@@ -206,9 +217,10 @@ feature_schema %>%
 The main question is which features are impactful on exam performance.  A starting point is to look at the correlations between features.  This shows if any features are consistently different when the question is correct verses incorrect.  At this stage, there is not enough information to make causual inference, but to merely note the correlations.  A correlation of 1 means between two features means that information about one completely expains the other.  The correlation of 0.97 between question ordinal, `q_ordinal`, and `remaining_exam_time` means that questions later in the exam have less time remaining on the clock, and questions earlier have more time remaining.  Observations such as this serve as a consistency check for the data.  As shown below, there is a negative correlation with `difficulty`, `minutes_used`, and `remaining_exam_time`.  This is explored later in the modeling section.
 
 ```{r , fig.width= 9, fig.height= 5}
+#bookmark only the numeric columns
 numeric_index <- sapply(adapt_data, is.numeric)
-numeric_cols = adapt_data[,numeric_index] %>%
-  mutate(correct = as.numeric(adapt_data$correct)) %>%
+numeric_cols = adapt_data[,numeric_index] %>% #get only numeric columns for corr plot
+  mutate(correct = as.numeric(adapt_data$correct)) %>% #convert from factor to numeric for corr plot
   select(correct, everything(),- contains("hist"), -EL_begin, -EL_end, -nth_exam, - nth_e_or_q, -hrs_since_previous_e) %>%
   rename(remaining_exam_time = approx_remaining_time,
          weekday = numeric_weekday) %>% 
@@ -231,6 +243,7 @@ corrplot(cor(numeric_cols),
 Class separation is how well the x-features separate out the class label, `correct` in this case.  These graphs show the empirical probability distributions, with red corresponding to incorrect questions and blue to correct questions.  Generally, the greater the difference between the red and the blue distributions the more predictive power for the given feature.  The greatest class separation is for `difficulty` and `minutes_used`, as seen in the lower right.
 
 ```{r fig.height = 5}
+#show class separation 
 numeric_cols %>%
   as_data_frame() %>% 
   select(-correct) %>% 
@@ -247,6 +260,7 @@ When created by the CoachingActuaries.com author, each question is assigned a se
 These question tags were too numerous to understand directly, and so historical experience features were created in order to approximate a user's learning over time.  These features were useful in constructing predictive models, as seen later.  An importance point is that these historical features allow for the quiz questions to be incorporated to the training and testing sets.  Otherwise, the quiz questions could not be mixed with the exam questions due to data quality reasons; for quizzes, my behavior changed with respect to looking up formulas on note sheets, spending long amounts of time per problem, and otherwise giving consistent effort.  For these reasons, the exam only the exam data was used for modeling.
 
 ```{r fig.width= 4, fig.height= 4}
+#show only the new features, those containing "hist" in the name
 feature_schema %>% 
   filter(str_detect(`Feature Name`, "hist")) %>% 
   datatable(options = opts)
@@ -256,6 +270,7 @@ As the below plot shows, there is improved class separation for several of the h
 
 ```{r fig.height = 5}
 adapt_data %>%
+  #remove variables which look bad
   select(contains("hist"), - hist_tot_time_correct, - hist_subcat_diff, - hist_total_time_q, - hist_total_time_q, - hist_cat_n, - hist_n_marked) %>%
   my_density_plot()
 ```
@@ -320,6 +335,8 @@ best_transformed = predict(preproc.values, newdata = best_subset)
 training_transformed <- best_transformed[index_train,]
 testing_transformed <- best_transformed[-index_train,]
 
+#Test out your own models using the data created up to this point
+
 #-----------------------------------------------------Naive Bayes--------------------------
 train_control <- trainControl(method = "cv", number=10)
 nb1 <- train(correct ~., data = training_transformed %>% select(-cat1), trControl=train_control, method="nb")
@@ -327,6 +344,8 @@ nb_metrics = eval_model("Naive Bayes", nb1, testing_transformed)
 
 #Logistic Regression
 train_control<- trainControl(method="cv", number=10)
+
+#these models were inferior to the uncommented ones
 
 # f1 = correct ~ difficulty + minutes_used
 # logit1<- train(f1, data = training_transformed, trControl=train_control, method="glm", family=binomial())
@@ -341,6 +360,7 @@ logit_metrics = eval_model("Logistic Regression", logit3, testing_transformed)
 #--------------------------------------------------K-Nearest Neighbor-----------------------
 ctrl <- trainControl(method="repeatedcv", repeats = 3)
 knn1 <- train(correct ~ ., data = training_transformed, method = "knn", trControl = ctrl, tuneLength = 20)
+#inferior model
 #knn2 <- train(f3, data = training_transformed, method = "knn", trControl = ctrl, tuneLength = 40)
 
 knn_metrics <- eval_model("K-Nearest Neighbor", knn1, testing_transformed)
@@ -366,6 +386,7 @@ rf_metrics <- eval_model("Random Forest", rf2, testing)
 
 #-----------------------------------------------------Model Metrics Summary Table ----------------
 
+#create a summary table of model performance
 metrics_data = rbind(nb_metrics, logit_metrics, knn_metrics, rf_metrics)
 metrics_data %>% 
   arrange(desc(AUC)) %>% 
@@ -384,6 +405,7 @@ Variable importance gives a measure of how the value of a given variable influen
 The most important feature to determening question outcomes was whether or not the question had been marked for review during the practice exam.  This is not surprising given that exam-takers can identify to a certain degree which questions they understand.  As this is a timed exam, `minutes_used` should be an important feature as is indicated.  The engineered historical feature `hist_greater_diff` measures the quantity and quality of preparation for the specific question type by taking the total difficulty of all questions previously answered under the current category.  `hist_net_diff` is has a similar definition.
 
 ```{r fig.height= 5, fig.width = 8}
+#plot the importance of a broader range of predictors, so use rf1 instead of rf2
 plot(varImp(rf1), top = 15)
 ```
 
@@ -442,7 +464,6 @@ p2 <- contour_data2 %>%
   mutate(yhat = -yhat) %>% 
   rename(`Probability of Correct` = yhat) %>% 
   ggplot(aes(difficulty, hist_greater_diff, z = `Probability of Correct`)) +
-  #scale_color_gradient(high = "white", low = "black") +
   geom_raster(aes(fill = `Probability of Correct`)) + 
   scale_fill_gradient(low = "white", high = "blue") +
   geom_contour(bins = 8, color = "white") + 
@@ -451,7 +472,6 @@ p2 <- contour_data2 %>%
   ylab("Historical Greater \nDifficulty Experience") +
   theme(legend.position="bottom")
   
-
 grid.arrange(p1, p2, nrow = 1)
 ```
 
@@ -468,7 +488,7 @@ grid.arrange(p1, p2, nrow = 1)
  
 4.  Practice questions are less useful when answered incorrectly.  For each specific sub-category, these models calculated a running total of the problem difficulty which added to the total when a question was answered correctly and subtracting when incorrect.  
  
-5.  Practice on hard questions.  Weight-lifters practice with heavier than compitition weights, baseball players practice-swing with weighted bats, martial artists puch bricks to strengthen their hands, and actuarial students should solve math problems more difficult than needed to prepare for the real exam.  These models used a feature which filters out questions of a lesser difficulty and found this to be significant in predicting question outcomes.
+5.  Practice on hard questions.  Baseball players practice-swing with weighted bats, martial artists punch bricks to strengthen their hands, and actuarial students should solve math problems more difficult than needed to prepare for the real exam.  These models used a feature which filters out questions of a lesser difficulty and found this to be significant in predicting question outcomes.
 
 ###Future Improvements
 
