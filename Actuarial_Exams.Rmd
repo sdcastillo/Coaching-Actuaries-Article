@@ -11,9 +11,6 @@ output:
 ---
 
 ```{r global_options, warning= F, message= F, echo = F}
-
-#Overview: this code is not intended as a tutorial.  Perhaps you are able to follow along.  If not, don't worry, this is not intended to be easy to follow.  A general data overview is that adapt_data is the primary data source, and the model_data is a cleaned version used for fitting models.  
-
 #sets the options for all knitr markdown chunks below
 knitr::opts_chunk$set(fig.width=12, fig.height=8, fig.path='Figs/',
                       echo=F, warning=FALSE, message=FALSE)
@@ -55,8 +52,10 @@ adapt_data = adapt_data %>%
   mutate_if(is.numeric, funs(round(., 1))) %>% 
   mutate(q_ordinal = as.numeric(q_ordinal),
           #Create numeric variable for use with corrplot.  Sunday is 1, Monday is 2, etc
-         numeric_weekday = zoo::index(weekday,levels(adapt_data$weekday)) + 2)
-})
+         numeric_weekday = zoo::index(weekday,levels(adapt_data$weekday)) + 2,
+         hist_repeat_question_YN = as.factor(ifelse(hist_repeat_question == 0, "Y", "N")))
+
+})#end suppress messages
 
 #for some models, the levels need to be valid variable names.  This means that they can't be "TRUE"/"FALSE"
 levels(adapt_data$correct) <- c("NO", "YES")
@@ -106,7 +105,6 @@ eval_model = function(cur_name = "model",cur_model, cur_test_data){
             'AUC' = round(roc(label, predictor)$auc, 5),
        'Test Set Accuracy' = round(out$overall[1], 5))
 }
-
 ```
 ##1. Introduction
 
@@ -136,7 +134,7 @@ The data and full R code for generating this article can be downloaded from [git
  
  - **Experience trumps difficulty.**  The Been There; Done That (BTDT) rule is that in an exam setting, the student should already have seen every question before in practice.  When looking at the partial dependence plots, there was evidence in support of BTDT.  Question difficulty as Adapt rates it is not necessarily related to low success rate.  Simply because other people find a topic difficult does not imply that the person taking the exam should.  
  
- - **Practice questions are less useful when answered incorrectly.**  For each specific sub-category, these models calculated a running total of the problem difficulty which added to the total when a question was answered correctly and subtracting when incorrect.  This feature could be used to predict whether any given question would be answered correctly.
+ - **Practice questions are less useful when answered incorrectly.** For each specific sub-category, these models calculated a running total of the problem difficulty which added to the total when a question was answered correctly and subtracting when incorrect. This feature could be used to predict whether any given question would be answered correctly.
  
  - **Practice on hard questions.**  Baseball players practice-swing with weighted bats, martial artists punch bricks to strengthen their hands, and actuarial students should solve math problems more difficult than needed to prepare for the real exam.  These models used a feature which filters out questions of a lesser difficulty and found this to be significant in predicting question outcomes.
 
@@ -249,6 +247,13 @@ numeric_cols %>%
   select(-correct) %>% 
   as.matrix() %>% 
   my_density_plot()
+
+numeric_cols %>%
+  as_data_frame() %>% 
+  select(-correct) %>% 
+  select(-2) %>% 
+  slice(1:500) %>% 
+  my_pairs_plot()
 ```
 
 ###Categorical Features
@@ -271,7 +276,7 @@ As the below plot shows, there is improved class separation for several of the h
 ```{r fig.height = 5}
 adapt_data %>%
   #remove variables which look bad
-  select(contains("hist"), - hist_tot_time_correct, - hist_subcat_diff, - hist_total_time_q, - hist_total_time_q, - hist_cat_n, - hist_n_marked) %>%
+  select(contains("hist"), - hist_tot_time_correct, - hist_subcat_diff, - hist_total_time_q, - hist_total_time_q, - hist_cat_n, - hist_n_marked, - hist_repeat_question_YN, - hist_repeat_question) %>%
   my_density_plot()
 ```
 
@@ -295,11 +300,10 @@ Because there were more cases of correct than incorrect problems in the training
 
 - **Naive Bayes:** A Naive Bayes classifier using Gaussian distributions was fit to a subset of the features.  The input numeric data was centered and scaled.  This performed well compared to more sophistocated models.
 - **Logistic Regression:** Several logit models were fit with different subsets of features.  The data was transformed prior to fitting with centering and scaling.  A power transformation was tested and increased accuracy by about 0.01, but this was not used in the final model due to lower interpretability.
-- **K-Nearest Neighbor:** KNN models were tested to the centered and scaled data.  These were tuned by varying the number of neighbors and testing with cross-validation against the testing set. 
-- **Random Forest:** The random forest model was used throughout the feature engineering process to assess variable importance.  Several versions were fit to various subsets of the data.  Parameters tuned were the number of variables available for splitting at each tree node.  The number of trees used was held constant at 500.
+- **K-Nearest Neighbor:** KNN models were tested to the centered and scaled data.  These were tuned by varying the number of neighbors and testing with cross-validation. 
+- **Random Forest:** The random forest model was used throughout the feature engineering process to assess variable importance.  Several versions were fit to various subsets of the data.  The only parameter tuned was the number of variables available for splitting at each tree node.  The number of trees used was held constant at 500.
 
 ```{r }
-
 #-----------------------------------------------------Data Splitting----------------------
 set.seed(400)
 #drop columns which have no predictive power
@@ -315,7 +319,7 @@ best_subset <-  model_data %>%
   ungroup() %>% 
   mutate_at(c("cat1", "cat2", "cat3", "subcat1", "subcat3", "subcat3"), funs(droplevels)) %>% 
   #factor levels mess up models
-  dplyr::select( correct, difficulty, marked, minutes_used, hist_greater_diff, hist_net_diff, approx_remaining_time, creation_hr, cat1, hist_repeat_question)
+  dplyr::select( correct, difficulty, marked, minutes_used, hist_greater_diff, hist_net_diff, approx_remaining_time, creation_hr, cat1, hist_repeat_question_YN)
 
 #this is the easily-interpretible data
 #this splits to preserve the ORIGINAL class distribution, but doesn't over/undersample
@@ -380,7 +384,7 @@ mtry <- seq(3,7,1) # mtry can be increased at the risk of over-fitting
 tunegrid <- expand.grid(.mtry=mtry)
 
 #best random forest so far
-rf2 <- train(correct ~ marked + minutes_used + difficulty + q_ordinal + approx_remaining_time + hist_net_diff + hist_greater_diff + subcat1, data = training , method="rf", metric=metric, tuneGrid=tunegrid, trControl=control)
+rf2 <- train(correct ~ marked + minutes_used + difficulty + q_ordinal + approx_remaining_time + hist_net_diff + hist_greater_diff + subcat1 + hist_repeat_question_YN, data = training , method="rf", metric=metric, tuneGrid=tunegrid, trControl=control)
 
 rf_metrics <- eval_model("Random Forest", rf2, testing)
 
@@ -393,15 +397,13 @@ metrics_data %>%
   datatable(options = opts)
 ```
 
-
 ###Model Selection
 
 The goal in modeling was to understand the data.  The Naive Bayes model performed best, although these results cannot be easily interpreted.  Given the amount of noise present in the data, the fact that this simple model out-performed its sophistocated counterparts is not surprising. While the logistic regression model performed well, there was doubt in the credibility of this performance due to the number of outliers present and p-values of the cofficients.  Because the random forest is the most resiliant to both outlying cases and multi-colinearity, this was chosen as the final model to use in interpretation.
 
 ###Model Interpretation
 
-Variable importance gives a measure of how the value of a given variable influences the outcome of `correct`, when holding all other variables constant.  This plot below was generated using a random forest model, and shows which factors are most important to whether a question is answered correctly or not. 
-
+Variable importance gives a measure of how the value of a given variable influences the outcome of `correct`.  This plot below was generated using a random forest model, and shows which factors are most important to whether a question is answered correctly or not. 
 The most important feature to determening question outcomes was whether or not the question had been marked for review during the practice exam.  This is not surprising given that exam-takers can identify to a certain degree which questions they understand.  As this is a timed exam, `minutes_used` should be an important feature as is indicated.  The engineered historical feature `hist_greater_diff` measures the quantity and quality of preparation for the specific question type by taking the total difficulty of all questions previously answered under the current category.  `hist_net_diff` is has a similar definition.
 
 ```{r fig.height= 5, fig.width = 8}
@@ -409,7 +411,9 @@ The most important feature to determening question outcomes was whether or not t
 plot(varImp(rf1), top = 15)
 ```
 
-Partial dependency plots are used to interpret complex machine learning models.  These show how the expected outcome changes with different levels on inputs.  The plots below were created using the best random forest model from the model selection section, and show how the probability of answering a question correctly changes when holding all else constant.  
+Partial dependency plots are used to interpret complex machine learning models.  These show how the expected outcome changes with different levels on inputs.  The plots below were created using the best random forest model from the model selection section, and show how the probability of answering a question correctly changes when adjusting for the other variables in the model. 
+
+These are not an exact measure of the conditional expectations, but are a useful tool in understanding the model.
 
 ```{r}
 make_rf_partial_plot <- function(rf_train, var_name, plot_title){
@@ -420,14 +424,14 @@ make_rf_partial_plot <- function(rf_train, var_name, plot_title){
   scale_y_reverse() + 
   ggtitle(plot_title) +
   ylab("Probability of \nCorrect ") + 
-  theme_light()
+  theme_light() 
 }
 
 grid.arrange(make_rf_partial_plot(rf2, "difficulty", "Question Difficulty"),
-             make_rf_partial_plot(rf2, "minutes_used", "Minutes Spent of Question"),
+             make_rf_partial_plot(rf2, "minutes_used", "Minutes Spent on Question"),
              make_rf_partial_plot(rf2, "approx_remaining_time", "Approximate Minutes Remaining"),
              make_rf_partial_plot(rf2, "hist_net_diff", "Historical Net Difficulty"),
-             make_rf_partial_plot(rf2, "hist_greater_diff", "Sum of Difficulty for Previous Easier Questions")
+             make_rf_partial_plot(rf2, "hist_greater_diff", "Sum of Difficulty for Previous Harder Questions")
                      )
 ```
 
@@ -438,7 +442,6 @@ We can plot any of the two partial dependencies together to examine how the prob
 **Difficulty and Experience Level (Below Right)**:
 
 In the graph of the partial dependence of `difficulty` verses experience with more difficult problems, `hist_greater_diff`, there is a clear relationship between how experience helps across all difficulty levels.  The maximum usefullness of exerience is in the range of 500-1000 total difficulty points.  This can be thought of as 100, 10-difficulty problems for the current topic, or 200, 5-difficulty problems.  The effect of prior experience improving the probability of success is consistent for all difficulty levels less than 6 or so.  This supports the Been There, Done That (BTDT) theory, that experience trumps difficulty.  Even if the difficulty is a 3, if the student lacks experience with questions of difficulty 3 or above (the y-axis is less than 500), they are unlikely to answer it correctly in an exam setting.
-
 
 ```{r fig.height = 5}
 contour_data <- pdp::partial(rf2,pred.var = c("difficulty", "minutes_used"), train = training)
@@ -486,7 +489,7 @@ grid.arrange(p1, p2, nrow = 1)
  
 3.  Experience trumps difficulty.  The Been There; Done That (BTDT) rule is that in an exam setting, the student should already have seen every question before in practice.  When looking at the partial dependence plots, there was evidence in support of BTDT. 
  
-4.  Practice questions are less useful when answered incorrectly.  For each specific sub-category, these models calculated a running total of the problem difficulty which added to the total when a question was answered correctly and subtracting when incorrect.  
+4.  Practice questions are less useful when answered incorrectly. For each specific sub-category, these models calculated a running total of the problem difficulty which added to the total when a question was answered correctly and subtracting when incorrect. This feature could be used to predict whether any given question would be answered correctly. 
  
 5.  Practice on hard questions.  Baseball players practice-swing with weighted bats, martial artists punch bricks to strengthen their hands, and actuarial students should solve math problems more difficult than needed to prepare for the real exam.  These models used a feature which filters out questions of a lesser difficulty and found this to be significant in predicting question outcomes.
 
